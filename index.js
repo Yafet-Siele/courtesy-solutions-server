@@ -41,11 +41,13 @@ const Email = require('./models/email');
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: "smtp.gmail.com",
+  port: 465,          // 465 for SSL, 587 for TLS
+  secure: true,       // true for 465, false for 587
   auth: {
-    user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASSWORD, 
-  },
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD
+  }
 });
 
 // Function to send email
