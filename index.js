@@ -30,7 +30,7 @@ app.post('/submit', async (req, res) => {
       calculator
     });
   } catch (error) {
-    console.error('❌ Error submitting data:', error);
+    console.error('Error submitting data:', error);
     res.status(500).json({ error: 'Failed to submit form and calculator data' });
   }
 });
@@ -40,20 +40,19 @@ const Email = require('./models/email');
 
 const nodemailer = require('nodemailer');
 
-// Configure Nodemailer transport using Gmail (you can use other email providers too)
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER, // Your Gmail address
-    pass: process.env.EMAIL_PASSWORD, // Your Gmail password or App password (recommended)
+    user: process.env.EMAIL_USER, 
+    pass: process.env.EMAIL_PASSWORD, 
   },
 });
 
 // Function to send email
 const sendEmail = (email) => {
   const mailOptions = {
-    from: process.env.EMAIL_USER,  // Sender's email address
-    to: email,                    // Recipient's email address
+    from: process.env.EMAIL_USER,  
+    to: email, 
     subject: 'Courtesy Solutions Cleaning',
     text: 'Thank you for contacting us!\n\nWe have received your request and will get back to you shortly.',
   };
@@ -69,10 +68,8 @@ app.post('/email', async (req, res) => {
       return res.status(400).json({ error: 'Enter a valid email' });
     }
 
-    // Send the email first
     await sendEmail(email);
 
-    // Insert or update email in the database (ignoring duplicates)
     await Email.updateOne(
       { email },  
       { $setOnInsert: { email } },
@@ -88,8 +85,13 @@ app.post('/email', async (req, res) => {
   }
 });
 
+app.get('/', (req, res) => {
+  res.send('API is running!');
+});
 
 
-app.listen(3001, () => {
-  console.log('Server is running on port 3001');
+const PORT = process.env.PORT || 3001;
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
