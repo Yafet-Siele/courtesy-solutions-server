@@ -3,6 +3,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+const { sendToHubSpot } = require("./hubspot");
+
 
 const calculatorModel = require('./models/calculatorData');
 const clientModel = require('./models/client');
@@ -78,6 +80,8 @@ app.post('/submit', async (req, res) => {
       await sendEmail(email); // send via MailerSend template
     }
 
+    await sendToHubSpot({ name, email, number, message });
+
     res.status(200).json({ message: 'Data submitted successfully', client, calculator });
   } catch (error) {
     console.error('Error submitting data:', error);
@@ -101,6 +105,19 @@ app.post('/email', async (req, res) => {
     res.status(500).json({ error: error.message || 'Failed to send email' });
   }
 });
+
+
+app.post('/test-hubspot', async (req, res) => {
+  const { name, email, number, message } = req.body;
+
+  try {
+    const response = await sendToHubSpot({ name, email, number, message });
+    res.json({ success: true, hubspotId: response.id || response.body.id });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 app.get('/', (req, res) => res.send('API is running!'));
 
