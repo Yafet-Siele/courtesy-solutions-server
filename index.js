@@ -1,18 +1,58 @@
 require('dotenv').config();
-express = require('express');
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const calculatorModel = require('./models/calculatorData')
+const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+
+const calculatorModel = require('./models/calculatorData');
 const clientModel = require('./models/client');
+const Email = require('./models/email');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB connected successfully!'))
   .catch((error) => console.error('Error connecting to MongoDB:', error));
 
+// Initialize MailerSend
+if (!process.env.MAILERSEND_API_KEY) {
+  console.error("Error: MAILERSEND_API_KEY is missing in .env");
+  process.exit(1);
+}
+
+const mailerSend = new MailerSend({
+  apiKey: process.env.MAILERSEND_API_KEY,
+});
+
+// Function to send email using MailerSend template
+const sendEmail = async (toEmail) => {
+  if (!process.env.EMAIL_FROM || !process.env.MAILERSEND_TEMPLATE_ID) {
+    throw new Error("EMAIL_FROM or MAILERSEND_TEMPLATE_ID is missing in .env");
+  }
+
+  const sender = new Sender(process.env.EMAIL_FROM, "Courtesy Solutions Cleaning");
+  const recipient = new Recipient(toEmail);
+
+  const emailParams = new EmailParams()
+    .setFrom(sender)
+    .setTo([recipient])
+    .setTemplateId(process.env.MAILERSEND_TEMPLATE_ID)
+    .setSubject("Courtesy Solutions Cleaning"); // <-- Required by MailerSend API
+
+  try {
+    const response = await mailerSend.email.send(emailParams);
+    console.log(`Email sent successfully to ${toEmail}:`, response);
+    return response;
+  } catch (error) {
+    console.error("Error sending email:", error);
+    throw error;
+  }
+};
+
+// Submit route
 app.post('/submit', async (req, res) => {
   try {
     const { name, email, number, message, ...calculatorData } = req.body;
@@ -20,80 +60,49 @@ app.post('/submit', async (req, res) => {
     const client = await clientModel.create({ name, email, number, message });
 
     let calculator = null;
-    if (calculatorData && Object.keys(calculatorData).length > 0) {
+    const requiredFields = [
+      "areaSize",
+      "numberOfBedrooms",
+      "numberOfBathrooms",
+      "selectedService",
+      "extras",
+      "estimatedCost"
+    ];
+    const hasAllFields = requiredFields.every(field => calculatorData[field] !== undefined);
+
+    if (hasAllFields) {
       calculator = await calculatorModel.create(calculatorData);
     }
 
-    res.status(200).json({
-      message: 'Data submitted successfully',
-      client,
-      calculator
-    });
+    if (email) {
+      await sendEmail(email); // send via MailerSend template
+    }
+
+    res.status(200).json({ message: 'Data submitted successfully', client, calculator });
   } catch (error) {
     console.error('Error submitting data:', error);
-    res.status(500).json({ error: 'Failed to submit form and calculator data' });
+    res.status(500).json({ error: error.message || 'Failed to submit form and calculator data' });
   }
 });
 
-const Email = require('./models/email');
-
-
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,          // 465 for SSL, 587 for TLS
-  secure: true,       // true for 465, false for 587
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
-  }
-});
-
-// Function to send email
-const sendEmail = (email) => {
-  const mailOptions = {
-    from: process.env.EMAIL_USER,  
-    to: email, 
-    subject: 'Courtesy Solutions Cleaning',
-    text: 'Thank you for contacting us!\n\nWe have received your request and will get back to you shortly.',
-  };
-
-  return transporter.sendMail(mailOptions);
-};
-
+// Route to just send email
 app.post('/email', async (req, res) => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Enter a valid email' });
-    }
+    if (!email) return res.status(400).json({ error: 'Enter a valid email' });
 
     await sendEmail(email);
 
-    await Email.updateOne(
-      { email },  
-      { $setOnInsert: { email } },
-      { upsert: true }
-    );
+    await Email.updateOne({ email }, { $setOnInsert: { email } }, { upsert: true });
 
-    res.status(200).json({
-      message: "Email processed and sent successfully"
-    });
+    res.status(200).json({ message: "Email sent successfully" });
   } catch (error) {
-    console.error('Error processing email:', error);
-    res.status(500).json({ error: 'Failed to process your email' });
+    console.error('Error sending email:', error);
+    res.status(500).json({ error: error.message || 'Failed to send email' });
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('API is running!');
-});
-
+app.get('/', (req, res) => res.send('API is running!'));
 
 const PORT = process.env.PORT || 3001;
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
