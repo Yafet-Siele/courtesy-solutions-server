@@ -2,9 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { sendToHubSpot } = require("./hubspot");
-
 
 const calculatorModel = require('./models/calculatorData');
 const clientModel = require('./models/client');
@@ -20,17 +20,71 @@ mongoose.connect(process.env.MONGODB_URI)
   .catch((error) => console.error('Error connecting to MongoDB:', error));
 
 // Initialize MailerSend
-if (!process.env.MAILERSEND_API_KEY) {
-  console.error("Error: MAILERSEND_API_KEY is missing in .env");
-  process.exit(1);
-}
+const mailerSend = process.env.MAILERSEND_API_KEY 
+  ? new MailerSend({ apiKey: process.env.MAILERSEND_API_KEY })
+  : null;
 
-const mailerSend = new MailerSend({
-  apiKey: process.env.MAILERSEND_API_KEY,
+// Initialize Nodemailer transporter
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST, // e.g., 'smtp.gmail.com'
+  port: process.env.SMTP_PORT || 587,
+  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
 });
 
+// Function to send email using Nodemailer
+const sendEmailWithNodemailer = async (toEmail) => {
+  const mailOptions = {
+    from: `"Courtesy Solutions Cleaning" <${process.env.EMAIL_FROM}>`,
+    to: toEmail,
+    subject: 'Courtesy Solutions Cleaning',
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+            .content { padding: 20px; background-color: #f9f9f9; }
+            .footer { text-align: center; padding: 10px; font-size: 12px; color: #777; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Thank You for Contacting Us!</h1>
+            </div>
+            <div class="content">
+              <p>Dear Customer,</p>
+              <p>Thank you for reaching out to Courtesy Solutions Cleaning. We've received your inquiry and will get back to you shortly.</p>
+              <p>Our team is committed to providing you with the best cleaning solutions tailored to your needs.</p>
+              <p>Best regards,<br>Courtesy Solutions Cleaning Team</p>
+            </div>
+            <div class="footer">
+              <p>&copy; ${new Date().getFullYear()} Courtesy Solutions Cleaning. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Email sent successfully to ${toEmail} via Nodemailer:`, info.messageId);
+    return info;
+  } catch (error) {
+    console.error("Error sending email with Nodemailer:", error);
+    throw error;
+  }
+};
+
 // Function to send email using MailerSend template
-const sendEmail = async (toEmail) => {
+const sendEmailWithMailerSend = async (toEmail) => {
   if (!process.env.EMAIL_FROM || !process.env.MAILERSEND_TEMPLATE_ID) {
     throw new Error("EMAIL_FROM or MAILERSEND_TEMPLATE_ID is missing in .env");
   }
@@ -42,16 +96,35 @@ const sendEmail = async (toEmail) => {
     .setFrom(sender)
     .setTo([recipient])
     .setTemplateId(process.env.MAILERSEND_TEMPLATE_ID)
-    .setSubject("Courtesy Solutions Cleaning"); // <-- Required by MailerSend API
+    .setSubject("Courtesy Solutions Cleaning");
 
   try {
     const response = await mailerSend.email.send(emailParams);
-    console.log(`Email sent successfully to ${toEmail}:`, response);
+    console.log(`Email sent successfully to ${toEmail} via MailerSend:`, response);
     return response;
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error("Error sending email with MailerSend:", error);
     throw error;
   }
+};
+
+// Unified email sending function with fallback
+const sendEmail = async (toEmail) => {
+  // Try MailerSend first if available
+  if (mailerSend && process.env.MAILERSEND_TEMPLATE_ID) {
+    try {
+      return await sendEmailWithMailerSend(toEmail);
+    } catch (error) {
+      // If MailerSend fails (e.g., trial limit), fall back to Nodemailer
+      console.log("MailerSend failed, falling back to Nodemailer...");
+      if (error.statusCode === 422 && error.body?.message?.includes('trial account')) {
+        console.warn("MailerSend trial limit reached. Using Nodemailer instead.");
+      }
+    }
+  }
+
+  // Use Nodemailer as fallback or primary method
+  return await sendEmailWithNodemailer(toEmail);
 };
 
 // Submit route
@@ -77,7 +150,7 @@ app.post('/submit', async (req, res) => {
     }
 
     if (email) {
-      await sendEmail(email); // send via MailerSend template
+      await sendEmail(email);
     }
 
     await sendToHubSpot({ name, email, number, message });
@@ -105,19 +178,6 @@ app.post('/email', async (req, res) => {
     res.status(500).json({ error: error.message || 'Failed to send email' });
   }
 });
-
-
-app.post('/test-hubspot', async (req, res) => {
-  const { name, email, number, message } = req.body;
-
-  try {
-    const response = await sendToHubSpot({ name, email, number, message });
-    res.json({ success: true, hubspotId: response.id || response.body.id });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 
 app.get('/', (req, res) => res.send('API is running!'));
 
