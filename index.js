@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+const axios = require('axios');
 const { sendToHubSpot } = require("./hubspot");
 
 const calculatorModel = require('./models/calculatorData');
@@ -19,16 +19,11 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB connected successfully!'))
   .catch((error) => console.error('Error connecting to MongoDB:', error));
 
-// Initialize MailerSend
-const mailerSend = process.env.MAILERSEND_API_KEY 
-  ? new MailerSend({ apiKey: process.env.MAILERSEND_API_KEY })
-  : null;
-
 // Initialize Nodemailer transporter
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST, // e.g., 'smtp.gmail.com'
+  host: process.env.SMTP_HOST,
   port: process.env.SMTP_PORT || 587,
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  secure: process.env.SMTP_SECURE === 'true',
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -36,11 +31,11 @@ const transporter = nodemailer.createTransport({
 });
 
 // Function to send email using Nodemailer
-const sendEmailWithNodemailer = async (toEmail) => {
+const sendEmailWithNodemailer = async (toEmail, customerName = 'Customer') => {
   const mailOptions = {
     from: `"Courtesy Solutions Cleaning" <${process.env.EMAIL_FROM}>`,
     to: toEmail,
-    subject: 'Courtesy Solutions Cleaning',
+    subject: 'Thank You for Contacting Us!',
     html: `
       <!DOCTYPE html>
       <html>
@@ -59,7 +54,7 @@ const sendEmailWithNodemailer = async (toEmail) => {
               <h1>Thank You for Contacting Us!</h1>
             </div>
             <div class="content">
-              <p>Dear Customer,</p>
+              <p>Dear ${customerName},</p>
               <p>Thank you for reaching out to Courtesy Solutions Cleaning. We've received your inquiry and will get back to you shortly.</p>
               <p>Our team is committed to providing you with the best cleaning solutions tailored to your needs.</p>
               <p>Best regards,<br>Courtesy Solutions Cleaning Team</p>
@@ -83,48 +78,91 @@ const sendEmailWithNodemailer = async (toEmail) => {
   }
 };
 
-// Function to send email using MailerSend template
-const sendEmailWithMailerSend = async (toEmail) => {
-  if (!process.env.EMAIL_FROM || !process.env.MAILERSEND_TEMPLATE_ID) {
-    throw new Error("EMAIL_FROM or MAILERSEND_TEMPLATE_ID is missing in .env");
+// Function to send email using Brevo REST API
+const sendEmailWithBrevo = async (toEmail, customerName = 'Customer') => {
+  if (!process.env.BREVO_API_KEY || !process.env.EMAIL_FROM) {
+    throw new Error("BREVO_API_KEY or EMAIL_FROM is missing in .env");
   }
 
-  const sender = new Sender(process.env.EMAIL_FROM, "Courtesy Solutions Cleaning");
-  const recipient = new Recipient(toEmail);
-
-  const emailParams = new EmailParams()
-    .setFrom(sender)
-    .setTo([recipient])
-    .setTemplateId(process.env.MAILERSEND_TEMPLATE_ID)
-    .setSubject("Courtesy Solutions Cleaning");
+  const emailData = {
+    sender: {
+      name: 'Courtesy Solutions Cleaning',
+      email: process.env.EMAIL_FROM
+    },
+    to: [
+      {
+        email: toEmail,
+        name: customerName
+      }
+    ],
+    subject: 'Thank You for Contacting Us!',
+    htmlContent: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+            .content { padding: 20px; background-color: #f9f9f9; }
+            .footer { text-align: center; padding: 10px; font-size: 12px; color: #777; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Thank You for Contacting Us!</h1>
+            </div>
+            <div class="content">
+              <p>Dear ${customerName},</p>
+              <p>Thank you for reaching out to Courtesy Solutions Cleaning. We've received your inquiry and will get back to you shortly.</p>
+              <p>Our team is committed to providing you with the best cleaning solutions tailored to your needs.</p>
+              <p>Best regards,<br>Courtesy Solutions Cleaning Team</p>
+            </div>
+            <div class="footer">
+              <p>&copy; ${new Date().getFullYear()} Courtesy Solutions Cleaning. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `
+  };
 
   try {
-    const response = await mailerSend.email.send(emailParams);
-    console.log(`Email sent successfully to ${toEmail} via MailerSend:`, response);
-    return response;
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      emailData,
+      {
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        }
+      }
+    );
+
+    console.log(`Email sent successfully to ${toEmail} via Brevo. Message ID:`, response.data.messageId);
+    return response.data;
   } catch (error) {
-    console.error("Error sending email with MailerSend:", error);
+    console.error("Error sending email with Brevo:", error.response?.data || error.message);
     throw error;
   }
 };
 
 // Unified email sending function with fallback
-const sendEmail = async (toEmail) => {
-  // Try MailerSend first if available
-  if (mailerSend && process.env.MAILERSEND_TEMPLATE_ID) {
+const sendEmail = async (toEmail, customerName = 'Customer') => {
+  // Try Brevo first if API key is available
+  if (process.env.BREVO_API_KEY) {
     try {
-      return await sendEmailWithMailerSend(toEmail);
+      return await sendEmailWithBrevo(toEmail, customerName);
     } catch (error) {
-      // If MailerSend fails (e.g., trial limit), fall back to Nodemailer
-      console.log("MailerSend failed, falling back to Nodemailer...");
-      if (error.statusCode === 422 && error.body?.message?.includes('trial account')) {
-        console.warn("MailerSend trial limit reached. Using Nodemailer instead.");
-      }
+      console.log("Brevo failed, falling back to Nodemailer...");
+      console.error("Brevo error details:", error.response?.data || error.message);
     }
   }
 
   // Use Nodemailer as fallback or primary method
-  return await sendEmailWithNodemailer(toEmail);
+  return await sendEmailWithNodemailer(toEmail, customerName);
 };
 
 // Submit route
@@ -150,10 +188,14 @@ app.post('/submit', async (req, res) => {
     }
 
     if (email) {
-      await sendEmail(email);
+      await sendEmail(email, name);
     }
 
-    await sendToHubSpot({ name, email, number, message });
+    // HubSpot sync - don't fail if it errors
+    const hubspotResult = await sendToHubSpot({ name, email, number, message });
+    if (!hubspotResult.success) {
+      console.warn('HubSpot sync failed, but continuing with submission:', hubspotResult.error);
+    }
 
     res.status(200).json({ message: 'Data submitted successfully', client, calculator });
   } catch (error) {
@@ -165,10 +207,10 @@ app.post('/submit', async (req, res) => {
 // Route to just send email
 app.post('/email', async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, name } = req.body;
     if (!email) return res.status(400).json({ error: 'Enter a valid email' });
 
-    await sendEmail(email);
+    await sendEmail(email, name || 'Customer');
 
     await Email.updateOne({ email }, { $setOnInsert: { email } }, { upsert: true });
 

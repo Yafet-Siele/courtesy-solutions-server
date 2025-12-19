@@ -6,56 +6,42 @@ const hubspotClient = new hubspot.Client({
 
 async function sendToHubSpot(clientData) {
   try {
-    // First, search for an existing contact by email
+    // Search for an existing contact by email
     const searchResponse = await hubspotClient.crm.contacts.searchApi.doSearch({
       filterGroups: [
         {
           filters: [{ propertyName: "email", operator: "EQ", value: clientData.email }]
         }
       ],
-      properties: ["firstname", "phone", "message", "submission_count"]
+      properties: ["firstname", "phone", "message"]
     });
 
     const total = searchResponse?.body?.total ?? 0;
 
     if (total > 0) {
-      // Contact exists → increment submission_count
-      const existing = searchResponse.body.results[0];
-      const contactId = existing.id;
-      const currentCount = Number(existing.properties.submission_count) || 0;
-      const newCount = currentCount + 1;
-
-      console.log(`Contact exists — incrementing submission_count to ${newCount}`);
-
-      const updateResponse = await hubspotClient.crm.contacts.basicApi.update(contactId, {
-        properties: {
-          firstname: clientData.name,
-          phone: clientData.number,
-          message: clientData.message || "",
-          submission_count: newCount
-        }
-      });
-
-      return updateResponse;
+      // Contact exists → don't add it
+      console.log(`Contact ${clientData.email} already in CRM — skipping`);
+      return { success: true, synced: false, message: 'Contact already exists in CRM' };
 
     } else {
       // Contact does not exist → create new
+      console.log(`Contact ${clientData.email} not in CRM — creating new contact`);
+
       const properties = {
         email: clientData.email,
         firstname: clientData.name,
         phone: clientData.number,
-        message: clientData.message || "",
-        submission_count: 1
+        message: clientData.message || ""
       };
 
       const createResponse = await hubspotClient.crm.contacts.basicApi.create({ properties });
       console.log("HubSpot Contact Created:", createResponse.id);
-      return createResponse;
+      return { success: true, data: createResponse, synced: true };
     }
 
   } catch (error) {
     console.error("HubSpot Error:", error.body || error.message);
-    throw error;
+    return { success: false, error: error.body || error.message };
   }
 }
 
